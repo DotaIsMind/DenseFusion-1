@@ -1,0 +1,182 @@
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
+
+import cv2
+import numpy as np
+import onnxruntime as ort
+
+from .geometry import quaternion_from_matrix, quaternion_matrix
+
+OBJLIST = [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+BORDER_LIST = [-1, 40, 80, 120, 160, 200, 240, 280, 320, 360, 400, 440, 480, 520, 560, 600, 640, 680]
+
+
+@dataclass
+class CameraIntrinsics:
+    cam_fx: float = 572.41140
+    cam_fy: float = 573.57043
+    cam_cx: float = 325.26110
+    cam_cy: float = 242.04899
+
+
+def mask_to_bbox(mask: np.ndarray):
+    mask_u8 = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(mask_u8, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    x = y = w = h = 0
+    for contour in contours:
+        tx, ty, tw, th = cv2.boundingRect(contour)
+        if tw * th > w * h:
+            x, y, w, h = tx, ty, tw, th
+    return [x, y, w, h]
+
+
+def get_bbox(bbox):
+    bbx = [bbox[1], bbox[1] + bbox[3], bbox[0], bbox[0] + bbox[2]]
+    bbx[0] = max(bbx[0], 0)
+    bbx[1] = min(bbx[1], 479)
+    bbx[2] = max(bbx[2], 0)
+    bbx[3] = min(bbx[3], 639)
+    rmin, rmax, cmin, cmax = bbx
+    r_b = rmax - rmin
+    c_b = cmax - cmin
+    for idx in range(len(BORDER_LIST) - 1):
+        if BORDER_LIST[idx] < r_b < BORDER_LIST[idx + 1]:
+            r_b = BORDER_LIST[idx + 1]
+            break
+    for idx in range(len(BORDER_LIST) - 1):
+        if BORDER_LIST[idx] < c_b < BORDER_LIST[idx + 1]:
+            c_b = BORDER_LIST[idx + 1]
+            break
+    center = [int((rmin + rmax) / 2), int((cmin + cmax) / 2)]
+    rmin = center[0] - int(r_b / 2)
+    rmax = center[0] + int(r_b / 2)
+    cmin = center[1] - int(c_b / 2)
+    cmax = center[1] + int(c_b / 2)
+    if rmin < 0:
+        rmax += -rmin
+        rmin = 0
+    if cmin < 0:
+        cmax += -cmin
+        cmin = 0
+    if rmax > 480:
+        rmin -= rmax - 480
+        rmax = 480
+    if cmax > 640:
+        cmin -= cmax - 640
+        cmax = 640
+    return rmin, rmax, cmin, cmax
+
+
+class OnnxDenseFusion:
+    def __init__(self, pose_onnx_path: str, refine_onnx_path: str):
+        self.pose_sess = ort.InferenceSession(pose_onnx_path, providers=["CPUExecutionProvider"])
+        self.refine_sess = ort.InferenceSession(refine_onnx_path, providers=["CPUExecutionProvider"])
+
+
+def preprocess_rgbd(
+    rgb: np.ndarray,
+    depth: np.ndarray,
+    mask: np.ndarray,
+    obj_index: int,
+    num_points: int,
+    intr: CameraIntrinsics,
+    input_h: int = 80,
+    input_w: int = 80,
+) -> Optional[Dict[str, np.ndarray]]:
+    if mask.ndim == 3:
+        mask = mask[:, :, 0]
+    valid_mask = (mask != 0) & (depth != 0)
+    if valid_mask.sum() == 0:
+        return None
+
+    bbox = mask_to_bbox((mask != 0).astype(np.uint8))
+    rmin, rmax, cmin, cmax = get_bbox(bbox)
+    rgb_crop = rgb[rmin:rmax, cmin:cmax, :3]
+    depth_crop = depth[rmin:rmax, cmin:cmax]
+    mask_crop = (mask[rmin:rmax, cmin:cmax] != 0).astype(np.uint8)
+
+    if rgb_crop.size == 0 or depth_crop.size == 0:
+        return None
+
+    rgb_resized = cv2.resize(rgb_crop, (input_w, input_h), interpolation=cv2.INTER_LINEAR)
+    depth_resized = cv2.resize(depth_crop, (input_w, input_h), interpolation=cv2.INTER_NEAREST)
+    mask_resized = cv2.resize(mask_crop, (input_w, input_h), interpolation=cv2.INTER_NEAREST)
+
+    choose = ((mask_resized != 0) & (depth_resized > 0)).flatten().nonzero()[0]
+    if choose.size == 0:
+        return None
+    if choose.size > num_points:
+        c_mask = np.zeros(choose.size, dtype=np.int32)
+        c_mask[:num_points] = 1
+        np.random.shuffle(c_mask)
+        choose = choose[c_mask.nonzero()]
+    else:
+        choose = np.pad(choose, (0, num_points - choose.size), mode="wrap")
+
+    xmap = np.tile(np.arange(input_h).reshape(-1, 1), (1, input_w))
+    ymap = np.tile(np.arange(input_w).reshape(1, -1), (input_h, 1))
+    depth_masked = depth_resized.flatten()[choose][:, np.newaxis].astype(np.float32)
+    xmap_masked = xmap.flatten()[choose][:, np.newaxis].astype(np.float32)
+    ymap_masked = ymap.flatten()[choose][:, np.newaxis].astype(np.float32)
+    pt2 = depth_masked
+    pt0 = (ymap_masked - intr.cam_cx) * pt2 / intr.cam_fx
+    pt1 = (xmap_masked - intr.cam_cy) * pt2 / intr.cam_fy
+    cloud = np.concatenate((pt0, pt1, pt2), axis=1) / 1000.0
+    choose = choose.reshape(1, 1, -1).astype(np.int64)
+    rgb_chw = np.transpose(rgb_resized.astype(np.float32), (2, 0, 1))
+    rgb_chw = rgb_chw / 255.0
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+    rgb_norm = (rgb_chw - mean) / std
+
+    return {
+        "points": cloud.astype(np.float32)[np.newaxis, :, :],
+        "choose": choose,
+        "img": rgb_norm[np.newaxis, :, :, :],
+        "idx": np.array([obj_index], dtype=np.int64),
+    }
+
+
+def infer_pose_onnx(runner: OnnxDenseFusion, data: Dict[str, np.ndarray], iteration: int, num_points: int):
+    pred_r, pred_t, pred_c, emb = runner.pose_sess.run(
+        None,
+        {
+            "img": data["img"],
+            "points": data["points"],
+            "choose": data["choose"],
+            "obj": data["idx"],
+        },
+    )
+    pred_r = pred_r / np.linalg.norm(pred_r, axis=2, keepdims=True)
+    pred_c = pred_c.reshape(1, num_points)
+    which_max = int(np.argmax(pred_c, axis=1)[0])
+    pred_t = pred_t.reshape(num_points, 1, 3)
+    my_r = pred_r[0][which_max].reshape(-1)
+    my_t = (data["points"].reshape(num_points, 1, 3) + pred_t)[which_max].reshape(-1)
+
+    for _ in range(iteration):
+        t_tensor = np.repeat(my_t.astype(np.float32).reshape(1, 1, 3), num_points, axis=1)
+        mat = quaternion_matrix(my_r)
+        r_tensor = mat[:3, :3].astype(np.float32).reshape(1, 3, 3)
+        mat[0:3, 3] = my_t
+        new_points = np.matmul((data["points"] - t_tensor), r_tensor)
+        pred_r_refine, pred_t_refine = runner.refine_sess.run(
+            None,
+            {
+                "points": new_points.astype(np.float32),
+                "emb": emb.astype(np.float32),
+                "obj": data["idx"],
+            },
+        )
+        pred_r_refine = pred_r_refine.reshape(1, 1, -1)
+        pred_r_refine = pred_r_refine / np.linalg.norm(pred_r_refine, axis=2, keepdims=True)
+        my_r_2 = pred_r_refine.reshape(-1)
+        my_t_2 = pred_t_refine.reshape(-1)
+        mat_2 = quaternion_matrix(my_r_2)
+        mat_2[0:3, 3] = my_t_2
+        mat_final = np.dot(mat, mat_2)
+        r_final = mat_final.copy()
+        r_final[0:3, 3] = 0
+        my_r = quaternion_from_matrix(r_final, True)
+        my_t = np.array([mat_final[0][3], mat_final[1][3], mat_final[2][3]], dtype=np.float32)
+    return my_r, my_t, float(pred_c[0, which_max])
