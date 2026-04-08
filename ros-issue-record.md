@@ -98,3 +98,23 @@
 - 结果:
   - `file_input_publisher` 持续发布到 `/camera/color/image_raw`、`/camera/depth/image_raw`
   - `densefusion_ros_node` 成功持续发布 `/pose_stamp`（日志显示多帧发布成功）
+
+## Issue 9: FastSAM ONNX 外部权重文件命名不匹配
+
+- 问题现象:
+  - 直接加载 `fast-sam-x.onnx` 报错缺少 `model.data`，而目录中实际文件名是 `fast-sam-x.data`。
+- 原因:
+  - ONNX 外部数据引用的是默认名 `model.data`。
+- 解决方案:
+  - 在 FastSAM 推理器初始化时自动检查并创建 `model.data -> fast-sam-x.data` 软链接。
+
+## Issue 10: FastSAM mask 在 LineMOD 上与目标实例 mask 差异较大
+
+- 问题现象:
+  - 使用 `fast-sam-x.onnx` 对 `Linemod_preprocessed` 跑 50 张样本 benchmark：
+  - GT vs FastSAM mask 平均 IoU 约 `0.0000`，位姿平移平均差约 `135.374 mm`。
+- 影响:
+  - 当前 FastSAM 直接“取最高分实例”策略不能稳定对齐 LineMOD 指定目标，导致 mask 质量偏低。
+- 解决方案:
+  - 作为功能验证链路，ROS 节点已可基于 FastSAM mask 稳定发布 pose。
+  - 后续建议接入目标选择策略（prompt/ROI/跟踪先验）或与检测框结合筛选实例，再用于 DenseFusion。

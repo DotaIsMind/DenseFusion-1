@@ -27,6 +27,7 @@ source install/setup.bash
 ros2 launch densefusion_ros camera_inference.launch.py \
   pose_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/densefusion_posenet.onnx \
   refine_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/densefusion_refiner.onnx \
+  fastsam_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/fast-sam-model/fast-sam-x.onnx \
   obj_id:=1
 ```
 
@@ -36,6 +37,7 @@ ros2 launch densefusion_ros camera_inference.launch.py \
 ros2 launch densefusion_ros local_file_test.launch.py \
   pose_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/densefusion_posenet.onnx \
   refine_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/densefusion_refiner.onnx \
+  fastsam_onnx_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/fast-sam-model/fast-sam-x.onnx \
   rgb_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/datasets/Linemod_preprocessed/Linemod_preprocessed/data/01/rgb/0000.png \
   depth_path:=/home/data/qrb_ros_simulation_ws/DenseFusion-1/datasets/Linemod_preprocessed/Linemod_preprocessed/data/01/depth/0000.png \
   obj_id:=1

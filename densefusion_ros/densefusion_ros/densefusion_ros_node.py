@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped, Vector3Stamped
@@ -7,7 +8,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
 
-from .densefusion_core import CameraIntrinsics, OBJLIST, OnnxDenseFusion, preprocess_rgbd, quaternion_matrix
+from .densefusion_core import CameraIntrinsics, OBJLIST, OnnxDenseFusion, Yolo11SegOnnx, preprocess_rgbd, quaternion_matrix
 from .densefusion_core.preprocess import infer_pose_onnx
 
 
@@ -21,6 +22,13 @@ class DenseFusionRosNode(Node):
         self.declare_parameter("iteration", 4)
         self.declare_parameter("pose_onnx_path", "")
         self.declare_parameter("refine_onnx_path", "")
+        self.declare_parameter(
+            "yolo_seg_onnx_path",
+            "/home/data/qrb_ros_simulation_ws/DenseFusion-1/yolo11-seg-model/yolo26n-seg.onnx",
+        )
+        self.declare_parameter("target_label", "duck")
+        self.declare_parameter("yolo_score_th", 0.25)
+        self.declare_parameter("yolo_mask_th", 0.5)
         self.declare_parameter("cam_fx", 572.41140)
         self.declare_parameter("cam_fy", 573.57043)
         self.declare_parameter("cam_cx", 325.26110)
@@ -36,6 +44,10 @@ class DenseFusionRosNode(Node):
         self.iteration = int(self.get_parameter("iteration").value)
         self.pose_onnx_path = self.get_parameter("pose_onnx_path").value
         self.refine_onnx_path = self.get_parameter("refine_onnx_path").value
+        self.yolo_seg_onnx_path = self.get_parameter("yolo_seg_onnx_path").value
+        self.target_label = str(self.get_parameter("target_label").value)
+        self.yolo_score_th = float(self.get_parameter("yolo_score_th").value)
+        self.yolo_mask_th = float(self.get_parameter("yolo_mask_th").value)
         self.depth_scale = float(self.get_parameter("depth_scale").value)
         self.input_h = int(self.get_parameter("input_h").value)
         self.input_w = int(self.get_parameter("input_w").value)
@@ -48,11 +60,20 @@ class DenseFusionRosNode(Node):
 
         if self.obj_id not in OBJLIST:
             raise ValueError(f"obj_id must be one of {OBJLIST}, got {self.obj_id}")
-        if not self.pose_onnx_path or not self.refine_onnx_path:
-            raise ValueError("pose_onnx_path and refine_onnx_path are required parameters")
+        if not self.pose_onnx_path or not self.refine_onnx_path or not self.yolo_seg_onnx_path:
+            raise ValueError("pose_onnx_path, refine_onnx_path and yolo_seg_onnx_path are required parameters")
+        if not self.yolo_seg_onnx_path.endswith(".onnx"):
+            raise ValueError(f"yolo_seg_onnx_path must be an ONNX file, got: {self.yolo_seg_onnx_path}")
+        if not os.path.exists(self.yolo_seg_onnx_path):
+            raise FileNotFoundError(f"YOLO ONNX model not found: {self.yolo_seg_onnx_path}")
 
         self.obj_index = OBJLIST.index(self.obj_id)
         self.runner = OnnxDenseFusion(self.pose_onnx_path, self.refine_onnx_path)
+        self.yolo_seg = Yolo11SegOnnx(
+            self.yolo_seg_onnx_path,
+            score_th=self.yolo_score_th,
+            mask_th=self.yolo_mask_th,
+        )
         self.bridge = CvBridge()
 
         self.pose_pub = self.create_publisher(PoseStamped, "/pose_stamp", 10)
@@ -64,6 +85,7 @@ class DenseFusionRosNode(Node):
         self.sync = ApproximateTimeSynchronizer([self.rgb_sub, self.depth_sub], queue_size=10, slop=0.1)
         self.sync.registerCallback(self._on_rgbd)
         self.get_logger().info(f"Subscribed RGB={self.rgb_topic}, Depth={self.depth_topic}")
+        self.get_logger().info(f"Using YOLO ONNX segmentation model: {self.yolo_seg_onnx_path}")
 
     def _to_depth_mm(self, depth_msg: Image) -> np.ndarray:
         if depth_msg.encoding == "16UC1":
@@ -77,7 +99,10 @@ class DenseFusionRosNode(Node):
         rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
         rgb = rgb_bgr[:, :, ::-1]
         depth = self._to_depth_mm(depth_msg)
-        mask = (depth > 0).astype(np.uint8) * 255
+        mask = self.yolo_seg.infer_mask(rgb, self.target_label)
+        if mask is None:
+            self.get_logger().warn(f"YOLO-Seg mask unavailable for label={self.target_label}, fallback to depth>0 mask.")
+            mask = (depth > 0).astype(np.uint8) * 255
 
         data = preprocess_rgbd(
             rgb,

@@ -9,6 +9,8 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("pose_onnx_path"),
             DeclareLaunchArgument("refine_onnx_path"),
+            DeclareLaunchArgument("yolo_seg_onnx_path"),
+            DeclareLaunchArgument("target_label", default_value="duck"),
             DeclareLaunchArgument("obj_id", default_value="1"),
             DeclareLaunchArgument("rgb_topic", default_value="/camera/color/image_raw"),
             DeclareLaunchArgument("depth_topic", default_value="/camera/depth/image_raw"),
@@ -21,6 +23,8 @@ def generate_launch_description():
                     {
                         "pose_onnx_path": LaunchConfiguration("pose_onnx_path"),
                         "refine_onnx_path": LaunchConfiguration("refine_onnx_path"),
+                        "yolo_seg_onnx_path": LaunchConfiguration("yolo_seg_onnx_path"),
+                        "target_label": LaunchConfiguration("target_label"),
                         "obj_id": LaunchConfiguration("obj_id"),
                         "rgb_topic": LaunchConfiguration("rgb_topic"),
                         "depth_topic": LaunchConfiguration("depth_topic"),
