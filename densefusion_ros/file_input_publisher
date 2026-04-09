@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+from densefusion_app.file_input_publisher import main
+
+
+if __name__ == "__main__":
+    main()

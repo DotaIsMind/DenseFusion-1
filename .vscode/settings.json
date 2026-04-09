@@ -1,5 +1,6 @@
 {
     "ROS2.distro": "jazzy",
+    "ROS2.rosSetupScript": "${workspaceFolder}/install/setup.bash",
     "python.autoComplete.extraPaths": [
         "/opt/ros/jazzy/lib/python3.12/site-packages"
     ]

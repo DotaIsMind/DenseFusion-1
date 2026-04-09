@@ -16,8 +16,8 @@ def generate_launch_description():
                 "vis_dir",
                 default_value="/home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/densefusion_vis",
             ),
-            DeclareLaunchArgument("rgb_path", default_value="/home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/Linemod_preprocessed/data/01/rgb/000000.png"),
-            DeclareLaunchArgument("depth_path", default_value="/home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/Linemod_preprocessed/data/01/depth/000000.png"),
+            DeclareLaunchArgument("rgb_path", default_value="/home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/Linemod_preprocessed/data/01/rgb/000170.png"),
+            DeclareLaunchArgument("depth_path", default_value="/home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/Linemod_preprocessed/data/01/depth/000170.png"),
             DeclareLaunchArgument("obj_id", default_value="1"),
             Node(
                 package="densefusion_ros",

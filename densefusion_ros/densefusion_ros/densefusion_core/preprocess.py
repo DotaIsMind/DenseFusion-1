@@ -1,4 +1,5 @@
 import os
+import ast
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -25,10 +26,15 @@ COCO_NAMES = [
 
 @dataclass
 class CameraIntrinsics:
-    cam_fx: float = 572.41140
-    cam_fy: float = 573.57043
-    cam_cx: float = 325.26110
-    cam_cy: float = 242.04899
+    # orgin LineMOD intrinsics
+    # cam_fx: float = 572.41140
+    # cam_fy: float = 573.57043
+    # cam_cx: float = 325.26110
+    # cam_cy: float = 242.04899
+    cam_fx: float = 461.07720947265625
+    cam_fy: float = 461.29638671875
+    cam_cx: float = 318.0372009277344
+    cam_cy: float = 236.3270721435547
 
 
 def mask_to_bbox(mask: np.ndarray):
@@ -146,6 +152,61 @@ class Yolo11SegOnnx:
         self.alias = {"duck": "bird"}
         self.sess = ort.InferenceSession(yolo_onnx_path, providers=["CPUExecutionProvider"])
         self.input_name = self.sess.get_inputs()[0].name
+        in_shape = self.sess.get_inputs()[0].shape
+        self.input_h = int(in_shape[2]) if len(in_shape) >= 4 and isinstance(in_shape[2], int) else 640
+        self.input_w = int(in_shape[3]) if len(in_shape) >= 4 and isinstance(in_shape[3], int) else 640
+        self._load_names_from_metadata()
+
+    def _load_names_from_metadata(self) -> None:
+        try:
+            meta = self.sess.get_modelmeta().custom_metadata_map
+            names_raw = meta.get("names")
+            if not names_raw:
+                return
+            names_obj = ast.literal_eval(names_raw)
+            if isinstance(names_obj, dict):
+                ordered = []
+                for key in sorted(names_obj.keys(), key=lambda k: int(k)):
+                    ordered.append(str(names_obj[key]))
+                if ordered:
+                    self.names = ordered
+        except Exception:
+            # Keep default COCO names when metadata parsing fails.
+            pass
+
+    @staticmethod
+    def _letterbox(
+        rgb: np.ndarray,
+        new_shape: Tuple[int, int],
+        color: Tuple[int, int, int] = (114, 114, 114),
+    ) -> Tuple[np.ndarray, float, Tuple[int, int, int, int]]:
+        h, w = rgb.shape[:2]
+        new_h, new_w = new_shape
+        r = min(float(new_w) / float(w), float(new_h) / float(h))
+        resize_w = int(round(w * r))
+        resize_h = int(round(h * r))
+        resized = cv2.resize(rgb, (resize_w, resize_h), interpolation=cv2.INTER_LINEAR)
+        dw = new_w - resize_w
+        dh = new_h - resize_h
+        left = int(dw // 2)
+        right = int(dw - left)
+        top = int(dh // 2)
+        bottom = int(dh - top)
+        padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+        return padded, r, (left, top, right, bottom)
+
+    @staticmethod
+    def _deletterbox_mask(mask_lb: np.ndarray, pads: Tuple[int, int, int, int], out_h: int, out_w: int) -> np.ndarray:
+        left, top, right, bottom = pads
+        h, w = mask_lb.shape[:2]
+        y0 = max(0, top)
+        y1 = max(y0, h - bottom)
+        x0 = max(0, left)
+        x1 = max(x0, w - right)
+        unpadded = mask_lb[y0:y1, x0:x1]
+        if unpadded.size == 0:
+            return np.zeros((out_h, out_w), dtype=np.uint8)
+        return cv2.resize(unpadded, (out_w, out_h), interpolation=cv2.INTER_NEAREST)
 
     def _target_class_id(self, target_label: str) -> Optional[int]:
         label = target_label.lower().strip()
@@ -157,8 +218,8 @@ class Yolo11SegOnnx:
 
     def infer_mask(self, rgb: np.ndarray, target_label: str = "duck") -> Optional[np.ndarray]:
         h, w = rgb.shape[:2]
-        rgb_640 = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
-        inp = np.transpose(rgb_640.astype(np.float32) / 255.0, (2, 0, 1))[np.newaxis, :, :, :]
+        rgb_lb, _, pads = self._letterbox(rgb, (self.input_h, self.input_w))
+        inp = np.transpose(rgb_lb.astype(np.float32) / 255.0, (2, 0, 1))[np.newaxis, :, :, :]
         dets, protos = self.sess.run(None, {self.input_name: inp})
         dets = dets[0]  # [300, 38]
         target_id = self._target_class_id(target_label)
@@ -179,8 +240,8 @@ class Yolo11SegOnnx:
         best = max(keep, key=lambda r: float(r[4]))
 
         x1, y1, x2, y2 = [int(v) for v in best[:4]]
-        x1, y1 = max(0, min(639, x1)), max(0, min(639, y1))
-        x2, y2 = max(0, min(639, x2)), max(0, min(639, y2))
+        x1, y1 = max(0, min(self.input_w - 1, x1)), max(0, min(self.input_h - 1, y1))
+        x2, y2 = max(0, min(self.input_w - 1, x2)), max(0, min(self.input_h - 1, y2))
         if x2 <= x1 or y2 <= y1:
             return None
 
@@ -188,20 +249,23 @@ class Yolo11SegOnnx:
         proto = protos[0]  # [32, 160, 160]
         lowres = np.tensordot(coeff, proto, axes=(0, 0))
         lowres = 1.0 / (1.0 + np.exp(-lowres))
-        mask_640 = cv2.resize(lowres.astype(np.float32), (640, 640), interpolation=cv2.INTER_LINEAR)
-        mask_bin = (mask_640 > self.mask_th).astype(np.uint8)
+        mask_lb = cv2.resize(lowres.astype(np.float32), (self.input_w, self.input_h), interpolation=cv2.INTER_LINEAR)
+        mask_bin = (mask_lb > self.mask_th).astype(np.uint8)
         box_mask = np.zeros_like(mask_bin, dtype=np.uint8)
         box_mask[y1:y2, x1:x2] = 1
         mask_bin = (mask_bin * box_mask).astype(np.uint8) * 255
         if mask_bin.sum() == 0:
             return None
-        return cv2.resize(mask_bin, (w, h), interpolation=cv2.INTER_NEAREST)
+        mask = self._deletterbox_mask(mask_bin, pads, h, w)
+        if mask.sum() == 0:
+            return None
+        return mask
 
     def infer_instances(self, rgb: np.ndarray, score_th: Optional[float] = None):
         h, w = rgb.shape[:2]
         th = self.score_th if score_th is None else score_th
-        rgb_640 = cv2.resize(rgb, (640, 640), interpolation=cv2.INTER_LINEAR)
-        inp = np.transpose(rgb_640.astype(np.float32) / 255.0, (2, 0, 1))[np.newaxis, :, :, :]
+        rgb_lb, _, pads = self._letterbox(rgb, (self.input_h, self.input_w))
+        inp = np.transpose(rgb_lb.astype(np.float32) / 255.0, (2, 0, 1))[np.newaxis, :, :, :]
         dets, protos = self.sess.run(None, {self.input_name: inp})
         dets = dets[0]
         proto = protos[0]
@@ -212,21 +276,23 @@ class Yolo11SegOnnx:
                 continue
             cls_id = int(row[5])
             x1, y1, x2, y2 = [int(v) for v in row[:4]]
-            x1, y1 = max(0, min(639, x1)), max(0, min(639, y1))
-            x2, y2 = max(0, min(639, x2)), max(0, min(639, y2))
+            x1, y1 = max(0, min(self.input_w - 1, x1)), max(0, min(self.input_h - 1, y1))
+            x2, y2 = max(0, min(self.input_w - 1, x2)), max(0, min(self.input_h - 1, y2))
             if x2 <= x1 or y2 <= y1:
                 continue
             coeff = row[6:].astype(np.float32)
             lowres = np.tensordot(coeff, proto, axes=(0, 0))
             lowres = 1.0 / (1.0 + np.exp(-lowres))
-            mask_640 = cv2.resize(lowres.astype(np.float32), (640, 640), interpolation=cv2.INTER_LINEAR)
-            mask_bin = (mask_640 > self.mask_th).astype(np.uint8)
+            mask_lb = cv2.resize(lowres.astype(np.float32), (self.input_w, self.input_h), interpolation=cv2.INTER_LINEAR)
+            mask_bin = (mask_lb > self.mask_th).astype(np.uint8)
             box_mask = np.zeros_like(mask_bin, dtype=np.uint8)
             box_mask[y1:y2, x1:x2] = 1
             mask_bin = (mask_bin * box_mask).astype(np.uint8) * 255
             if mask_bin.sum() == 0:
                 continue
-            mask = cv2.resize(mask_bin, (w, h), interpolation=cv2.INTER_NEAREST)
+            mask = self._deletterbox_mask(mask_bin, pads, h, w)
+            if mask.sum() == 0:
+                continue
             instances.append(
                 {
                     "class_id": cls_id,

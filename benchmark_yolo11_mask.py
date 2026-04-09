@@ -25,8 +25,8 @@ from densefusion_ros.densefusion_core.geometry import quaternion_matrix  # type:
 def parse_args():
     parser = argparse.ArgumentParser(description="Benchmark DenseFusion: GT mask vs YOLO11-seg mask")
     parser.add_argument("--dataset_root", required=True)
-    parser.add_argument("--obj_id", type=int, default=1)
-    parser.add_argument("--target_label", default="duck")
+    parser.add_argument("--obj_id", type=int, default=2)
+    parser.add_argument("--target_label", default="cup")
     parser.add_argument("--num_samples", type=int, default=50)
     parser.add_argument("--num_points", type=int, default=500)
     parser.add_argument("--iteration", type=int, default=4)
@@ -136,10 +136,11 @@ def run():
 
     for sid in test_ids:
         rgb = cv2.imread(str(obj_dir / "rgb" / f"{sid}.png"), cv2.IMREAD_COLOR)
-        depth = cv2.imread(str(obj_dir / "depth" / f"{sid}.png"), cv2.IMREAD_UNCHANGED).astype(np.float32)
+        depth_raw = cv2.imread(str(obj_dir / "depth" / f"{sid}.png"), cv2.IMREAD_UNCHANGED)
         gt_mask = cv2.imread(str(obj_dir / "mask" / f"{sid}.png"), cv2.IMREAD_UNCHANGED)
-        if rgb is None or depth is None or gt_mask is None:
+        if rgb is None or depth_raw is None or gt_mask is None:
             continue
+        depth = depth_raw.astype(np.float32)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
 
         t0 = time.perf_counter()

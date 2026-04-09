@@ -1,17 +1,69 @@
 import numpy as np
 import os
+import sys
 import cv2
 import rclpy
-from cv_bridge import CvBridge
+from pathlib import Path
 from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
 
+def _load_pose_result_msg_type():
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    probe_roots = [Path.cwd(), Path(__file__).resolve()]
+    probe_roots.extend(Path(__file__).resolve().parents)
+    generated_sites = []
+    for root in probe_roots:
+        candidates = [
+            root / "install" / "densefusion_ros" / "lib" / pyver / "site-packages",
+            root / "densefusion_ros" / "install" / "densefusion_ros" / "lib" / pyver / "site-packages",
+        ]
+        for cand in candidates:
+            if (cand / "densefusion_ros" / "msg").is_dir():
+                generated_sites.append(str(cand))
+
+    # Also reuse existing sys.path entries that already contain generated messages.
+    for path in list(sys.path):
+        p = Path(path)
+        if (p / "densefusion_ros" / "msg").is_dir():
+            generated_sites.append(str(p))
+
+    # Move generated message site-packages ahead of workspace source dirs to avoid
+    # importing the source Python package "densefusion_ros" (which has no .msg).
+    for site in reversed(list(dict.fromkeys(generated_sites))):
+        if site in sys.path:
+            sys.path.remove(site)
+        sys.path.insert(0, site)
+
+    # If a shadowing source package has already been imported, discard it.
+    loaded_pkg = sys.modules.get("densefusion_ros")
+    loaded_file = str(getattr(loaded_pkg, "__file__", ""))
+    if loaded_pkg is not None and "/site-packages/" not in loaded_file:
+        sys.modules.pop("densefusion_ros", None)
+        sys.modules.pop("densefusion_ros.msg", None)
+
+    from densefusion_ros.msg import PoseEstimationResult
+
+    # Ensure generated rosidl type support is loaded before create_publisher.
+    PoseEstimationResult.__class__.__import_type_support__()
+    if PoseEstimationResult.__class__._TYPE_SUPPORT is None:
+        raise RuntimeError(
+            "PoseEstimationResult type support is unavailable. "
+            "Please rebuild and source this workspace: "
+            "`colcon build --symlink-install --packages-select densefusion_ros --base-paths densefusion_ros` "
+            "then `source install/setup.bash`."
+        )
+    return PoseEstimationResult
+
+
+PoseEstimationResult = _load_pose_result_msg_type()
+
 from .densefusion_core import CameraIntrinsics, OBJLIST, OnnxDenseFusion, Yolo11SegOnnx, preprocess_rgbd, quaternion_matrix
 from .densefusion_core.preprocess import infer_pose_onnx
 
+"""
 OBJ_ID_TO_YOLO_LABEL = {
     1: "bottle",
     2: "cup",
@@ -27,6 +79,9 @@ OBJ_ID_TO_YOLO_LABEL = {
     14: "lamp",
     15: "cell phone",
 }
+"""
+CUP_OBJ_ID = 2
+CUP_LABEL = "cup"
 
 
 class DenseFusionRosNode(Node):
@@ -34,7 +89,7 @@ class DenseFusionRosNode(Node):
         super().__init__("densefusion_ros_node")
         self.declare_parameter("rgb_topic", "/camera/color/image_raw")
         self.declare_parameter("depth_topic", "/camera/depth/image_raw")
-        self.declare_parameter("obj_id", 1)
+        self.declare_parameter("obj_id", CUP_OBJ_ID)
         self.declare_parameter("num_points", 500)
         self.declare_parameter("iteration", 4)
         self.declare_parameter("pose_onnx_path", "")
@@ -43,14 +98,13 @@ class DenseFusionRosNode(Node):
             "yolo_seg_onnx_path",
             "/home/data/qrb_ros_simulation_ws/DenseFusion-1/yolo11-seg-model/yolo26n-seg.onnx",
         )
-        # "auto": choose a recommended YOLO label from obj_id.
-        self.declare_parameter("target_label", "auto")
+        self.declare_parameter("target_label", CUP_LABEL)
         self.declare_parameter("yolo_score_th", 0.25)
         self.declare_parameter("yolo_mask_th", 0.5)
-        self.declare_parameter("cam_fx", 572.41140)
-        self.declare_parameter("cam_fy", 573.57043)
-        self.declare_parameter("cam_cx", 325.26110)
-        self.declare_parameter("cam_cy", 242.04899)
+        self.declare_parameter("cam_fx", 461.07720947265625)
+        self.declare_parameter("cam_fy", 461.29638671875)
+        self.declare_parameter("cam_cx", 318.0372009277344)
+        self.declare_parameter("cam_cy", 236.3270721435547)
         self.declare_parameter("depth_scale", 1000.0)
         self.declare_parameter("input_h", 80)
         self.declare_parameter("input_w", 80)
@@ -89,16 +143,17 @@ class DenseFusionRosNode(Node):
         if not os.path.exists(self.yolo_seg_onnx_path):
             raise FileNotFoundError(f"YOLO ONNX model not found: {self.yolo_seg_onnx_path}")
 
-        if self.target_label.strip().lower() in ("", "auto"):
-            auto_label = OBJ_ID_TO_YOLO_LABEL.get(self.obj_id, "bottle")
-            self.target_label = auto_label
-            self.get_logger().info(
-                f"Auto target_label enabled: obj_id={self.obj_id} -> target_label='{self.target_label}'"
+        if self.obj_id != CUP_OBJ_ID:
+            self.get_logger().warn(
+                f"Only CUP is supported in this node. Override obj_id {self.obj_id} -> {CUP_OBJ_ID}."
             )
-        else:
-            self.get_logger().info(
-                f"Using manual target_label='{self.target_label}' for obj_id={self.obj_id}"
+            self.obj_id = CUP_OBJ_ID
+        if self.target_label.strip().lower() != CUP_LABEL:
+            self.get_logger().warn(
+                f"Only CUP is supported in this node. Override target_label '{self.target_label}' -> '{CUP_LABEL}'."
             )
+            self.target_label = CUP_LABEL
+        self.get_logger().info(f"CUP-only mode enabled: obj_id={self.obj_id}, target_label='{self.target_label}'")
 
         self.obj_index = OBJLIST.index(self.obj_id)
         self.runner = OnnxDenseFusion(self.pose_onnx_path, self.refine_onnx_path)
@@ -107,7 +162,6 @@ class DenseFusionRosNode(Node):
             score_th=self.yolo_score_th,
             mask_th=self.yolo_mask_th,
         )
-        self.bridge = CvBridge()
         self.vis_index = 0
         if self.save_vis:
             self.seg_vis_dir = os.path.join(self.vis_dir, "yolo_seg")
@@ -121,6 +175,8 @@ class DenseFusionRosNode(Node):
         self.pose_pub = self.create_publisher(PoseStamped, "/pose_stamp", 10)
         self.offset_pub = self.create_publisher(Vector3Stamped, "/pose_stamp_offset", 10)
         self.rot_mat_pub = self.create_publisher(Float64MultiArray, "/pose_stamp_rotation_matrix", 10)
+        self.pose_result_pub = self.create_publisher(PoseEstimationResult, "/pose_estimation_result", 10)
+        self.pose_result_frame_id = 0
 
         self.rgb_sub = Subscriber(self, Image, self.rgb_topic)
         self.depth_sub = Subscriber(self, Image, self.depth_topic)
@@ -129,18 +185,65 @@ class DenseFusionRosNode(Node):
         self.get_logger().info(f"Subscribed RGB={self.rgb_topic}, Depth={self.depth_topic}")
         self.get_logger().info(f"Using YOLO ONNX segmentation model: {self.yolo_seg_onnx_path}")
 
+    @staticmethod
+    def _apply_endianness(arr: np.ndarray, msg: Image) -> np.ndarray:
+        msg_is_big = bool(msg.is_bigendian)
+        host_is_big = sys.byteorder == "big"
+        if msg_is_big != host_is_big:
+            return arr.byteswap().view(arr.dtype.newbyteorder("="))
+        return arr
+
+    def _to_bgr(self, rgb_msg: Image) -> np.ndarray:
+        encoding = str(rgb_msg.encoding).lower()
+        raw = np.frombuffer(rgb_msg.data, dtype=np.uint8)
+        row_stride = int(rgb_msg.step)
+        if row_stride <= 0:
+            raise ValueError(f"Invalid rgb step={row_stride}")
+        if encoding in ("bgr8", "rgb8"):
+            needed = int(rgb_msg.width) * 3
+            img = raw.reshape(int(rgb_msg.height), row_stride)[:, :needed].reshape(int(rgb_msg.height), int(rgb_msg.width), 3)
+            if encoding == "rgb8":
+                img = img[:, :, ::-1]
+            return np.ascontiguousarray(img)
+        if encoding in ("bgra8", "rgba8"):
+            needed = int(rgb_msg.width) * 4
+            img = raw.reshape(int(rgb_msg.height), row_stride)[:, :needed].reshape(int(rgb_msg.height), int(rgb_msg.width), 4)
+            if encoding == "rgba8":
+                img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+            return np.ascontiguousarray(img)
+        raise ValueError(f"Unsupported rgb encoding: {rgb_msg.encoding}")
+
     def _to_depth_mm(self, depth_msg: Image) -> np.ndarray:
-        if depth_msg.encoding == "16UC1":
-            depth_mm = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-            return np.array(depth_mm, dtype=np.float32)
-        depth_m = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-        depth_m = np.array(depth_m, dtype=np.float32)
-        return depth_m * self.depth_scale
+        encoding = str(depth_msg.encoding).lower()
+        h = int(depth_msg.height)
+        w = int(depth_msg.width)
+        if encoding in ("16uc1", "mono16"):
+            raw = np.frombuffer(depth_msg.data, dtype=np.uint16)
+            depth = raw.reshape(h, int(depth_msg.step) // 2)[:, :w]
+            depth = self._apply_endianness(depth, depth_msg)
+            return depth.astype(np.float32)
+        if encoding in ("32fc1", "32fc"):
+            raw = np.frombuffer(depth_msg.data, dtype=np.float32)
+            depth_m = raw.reshape(h, int(depth_msg.step) // 4)[:, :w]
+            depth_m = self._apply_endianness(depth_m, depth_msg)
+            return depth_m.astype(np.float32) * self.depth_scale
+        raise ValueError(f"Unsupported depth encoding: {depth_msg.encoding}")
 
     def _on_rgbd(self, rgb_msg: Image, depth_msg: Image):
-        rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
+        try:
+            rgb_bgr = self._to_bgr(rgb_msg)
+            depth = self._to_depth_mm(depth_msg)
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to decode image messages: {exc}")
+            return
         rgb = rgb_bgr[:, :, ::-1]
-        depth = self._to_depth_mm(depth_msg)
+        if rgb.shape[:2] != depth.shape[:2]:
+            self.get_logger().warn(
+                f"RGB/Depth resolution mismatch: rgb={rgb.shape[:2]} depth={depth.shape[:2]}; frame skipped."
+            )
+            return
         mask = self.yolo_seg.infer_mask(rgb, self.target_label)
         mask_source = "yolo"
         if mask is None:
@@ -196,6 +299,14 @@ class DenseFusionRosNode(Node):
         rot_msg = Float64MultiArray()
         rot_msg.data = rot.reshape(-1).astype(float).tolist()
         self.rot_mat_pub.publish(rot_msg)
+
+        pose_result = PoseEstimationResult()
+        pose_result.header = rgb_msg.header
+        pose_result.frame_id = int(self.pose_result_frame_id)
+        pose_result.rotation_matrix = rot.reshape(-1).astype(float).tolist()
+        pose_result.translation_vector = trans.reshape(-1).astype(float).tolist()
+        self.pose_result_pub.publish(pose_result)
+        self.pose_result_frame_id += 1
 
     def _project_point(self, pt3: np.ndarray):
         x, y, z = float(pt3[0]), float(pt3[1]), float(pt3[2])

@@ -2,8 +2,8 @@
   "frame_id": "000023",
   "color_info": {
     "header": {
-      "stamp_sec": 1775725444,
-      "stamp_nanosec": 326071040,
+      "stamp_sec": 1775737590,
+      "stamp_nanosec": 302929920,
       "frame_id": "camera_color_optical_frame"
     },
     "height": 480,
@@ -60,8 +60,8 @@
   },
   "depth_info": {
     "header": {
-      "stamp_sec": 1775725444,
-      "stamp_nanosec": 326221056,
+      "stamp_sec": 1775737590,
+      "stamp_nanosec": 303079936,
       "frame_id": "camera_color_optical_frame"
     },
     "height": 480,

@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import rclpy
-from cv_bridge import CvBridge
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
@@ -24,7 +23,6 @@ class FileInputPublisher(Node):
         if not self.rgb_path or not self.depth_path:
             raise ValueError("rgb_path and depth_path are required for file input publisher")
 
-        self.bridge = CvBridge()
         self.rgb_pub = self.create_publisher(Image, self.rgb_topic, 10)
         self.depth_pub = self.create_publisher(Image, self.depth_topic, 10)
         self.timer = self.create_timer(max(0.01, 1.0 / self.publish_hz), self._tick)
@@ -42,6 +40,19 @@ class FileInputPublisher(Node):
         self.get_logger().info(f"Publishing test files to {self.rgb_topic} and {self.depth_topic}")
 
     @staticmethod
+    def _to_image_msg(arr: np.ndarray, encoding: str, stamp, frame_id: str) -> Image:
+        msg = Image()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.height = int(arr.shape[0])
+        msg.width = int(arr.shape[1])
+        msg.encoding = encoding
+        msg.is_bigendian = 0
+        msg.step = int(arr.strides[0])
+        msg.data = np.ascontiguousarray(arr).tobytes()
+        return msg
+
+    @staticmethod
     def _ensure_depth_u16(depth):
         if depth.dtype == np.uint16:
             return depth
@@ -56,12 +67,8 @@ class FileInputPublisher(Node):
 
     def _tick(self):
         stamp = self.get_clock().now().to_msg()
-        rgb_msg = self.bridge.cv2_to_imgmsg(self.rgb, encoding="bgr8")
-        depth_msg = self.bridge.cv2_to_imgmsg(self.depth, encoding="16UC1")
-        rgb_msg.header.stamp = stamp
-        depth_msg.header.stamp = stamp
-        rgb_msg.header.frame_id = "camera_color_frame"
-        depth_msg.header.frame_id = "camera_depth_frame"
+        rgb_msg = self._to_image_msg(self.rgb, "bgr8", stamp, "camera_color_frame")
+        depth_msg = self._to_image_msg(self.depth, "16UC1", stamp, "camera_depth_frame")
         self.rgb_pub.publish(rgb_msg)
         self.depth_pub.publish(depth_msg)
 
