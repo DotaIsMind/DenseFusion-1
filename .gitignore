@@ -14,5 +14,6 @@ build/
 log/
 benchmark-ouputs/
 densefusion_ros/densefusion_vis/
+datasets/ycb-test-data/
 
 .vscode/

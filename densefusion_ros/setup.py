@@ -9,7 +9,16 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
-        (f"share/{package_name}/launch", ["launch/camera_inference.launch.py", "launch/local_file_test.launch.py"]),
+        (
+            f"share/{package_name}/launch",
+            [
+                "launch/camera_inference.launch.py",
+                "launch/local_file_test.launch.py",
+                "launch/camera_inference_ycb.launch.py",
+                "launch/local_file_test_ycb.launch.py",
+                "launch/camera_inference_ycb_mask.launch.py",
+            ],
+        ),
     ],
     install_requires=[
         "setuptools",
@@ -26,6 +35,7 @@ setup(
     entry_points={
         "console_scripts": [
             "densefusion_ros_node = densefusion_ros.densefusion_ros_node:main",
+            "densefusion_ros_node_ycb = densefusion_ros.densefusion_ros_node_ycb:main",
             "file_input_publisher = densefusion_ros.file_input_publisher:main",
         ],
     },

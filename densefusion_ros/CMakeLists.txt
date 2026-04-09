@@ -18,17 +18,31 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-# Install Python node package manually to avoid target conflicts between
-# ament_python_install_package() and rosidl-generated "densefusion_ros" Python modules.
-install(
-  DIRECTORY densefusion_ros/
-  DESTINATION ${PYTHON_INSTALL_DIR}/densefusion_app
-  FILES_MATCHING PATTERN "*.py"
-)
+# Install Python source files as symlinks so code changes take effect immediately
+# without a full rebuild. Using install(CODE) + cmake -E create_symlink because
+# install(DIRECTORY) always copies (symlink-install has no effect on it), and
+# ament_python_install_package() conflicts with rosidl-generated "densefusion_ros"
+# Python modules that share the same package name.
+install(CODE "
+  set(_src_dir \"${CMAKE_CURRENT_SOURCE_DIR}/densefusion_ros\")
+  set(_dst_dir \"\${CMAKE_INSTALL_PREFIX}/${PYTHON_INSTALL_DIR}/densefusion_app\")
+  file(GLOB_RECURSE _py_files
+    RELATIVE \"${CMAKE_CURRENT_SOURCE_DIR}/densefusion_ros\"
+    \"${CMAKE_CURRENT_SOURCE_DIR}/densefusion_ros/*.py\")
+  foreach(_rel_path \${_py_files})
+    set(_src \"\${_src_dir}/\${_rel_path}\")
+    set(_dst \"\${_dst_dir}/\${_rel_path}\")
+    get_filename_component(_dst_parent \"\${_dst}\" DIRECTORY)
+    execute_process(COMMAND \${CMAKE_COMMAND} -E make_directory \"\${_dst_parent}\")
+    execute_process(COMMAND \${CMAKE_COMMAND} -E remove -f \"\${_dst}\")
+    execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink \"\${_src}\" \"\${_dst}\")
+  endforeach()
+")
 
 install(
   PROGRAMS
     densefusion_ros_node
+    densefusion_ros_node_ycb
     file_input_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
