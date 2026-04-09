@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -32,7 +33,26 @@ class FileInputPublisher(Node):
         self.depth = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
         if self.rgb is None or self.depth is None:
             raise RuntimeError(f"Failed to load rgb/depth from {self.rgb_path} / {self.depth_path}")
+        self.depth = self._ensure_depth_u16(self.depth)
+        if self.depth.shape[:2] != self.rgb.shape[:2]:
+            raise RuntimeError(
+                f"RGB/Depth resolution mismatch: rgb={self.rgb.shape[:2]} depth={self.depth.shape[:2]}. "
+                "Please use aligned streams or matching camera profiles."
+            )
         self.get_logger().info(f"Publishing test files to {self.rgb_topic} and {self.depth_topic}")
+
+    @staticmethod
+    def _ensure_depth_u16(depth):
+        if depth.dtype == np.uint16:
+            return depth
+        if depth.dtype in (np.float32, np.float64):
+            depth_mm = depth.copy()
+            # If depth appears to be in meters, convert to millimeters.
+            if float(depth_mm.max()) < 100.0:
+                depth_mm = depth_mm * 1000.0
+            depth_mm = depth_mm.clip(0.0, 65535.0)
+            return depth_mm.astype(np.uint16)
+        return depth.astype(np.uint16)
 
     def _tick(self):
         stamp = self.get_clock().now().to_msg()

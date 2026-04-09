@@ -13,3 +13,6 @@ install/
 build/
 log/
 benchmark-ouputs/
+densefusion_ros/densefusion_vis/
+
+.vscode/
