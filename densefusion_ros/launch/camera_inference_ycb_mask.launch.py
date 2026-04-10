@@ -27,8 +27,10 @@ def generate_launch_description():
                     {
                         "pose_onnx_path": LaunchConfiguration("pose_onnx_path"),
                         "refine_onnx_path": LaunchConfiguration("refine_onnx_path"),
-                        "target_label": "banana",
-                        "obj_id": 11,
+                        # "target_label": "banana",
+                        # "obj_id": 11,
+                        "target_label": "bottle",
+                        "obj_id": 5,
                         "rgb_topic": LaunchConfiguration("rgb_topic"),
                         "depth_topic": LaunchConfiguration("depth_topic"),
                         # Fixed mask-only mode: non-empty mask_topic disables YOLO branch.

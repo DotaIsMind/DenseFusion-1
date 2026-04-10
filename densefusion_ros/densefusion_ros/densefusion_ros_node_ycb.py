@@ -1,5 +1,7 @@
 import os
+import sys
 from typing import Optional
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -7,8 +9,53 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
+from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
+
+
+def _load_pose_result_msg_type():
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    probe_roots = [Path.cwd(), Path(__file__).resolve()]
+    probe_roots.extend(Path(__file__).resolve().parents)
+    generated_sites = []
+    for root in probe_roots:
+        candidates = [
+            root / "install" / "densefusion_ros" / "lib" / pyver / "site-packages",
+            root / "densefusion_ros" / "install" / "densefusion_ros" / "lib" / pyver / "site-packages",
+        ]
+        for cand in candidates:
+            if (cand / "densefusion_ros" / "msg").is_dir():
+                generated_sites.append(str(cand))
+
+    for path in list(sys.path):
+        p = Path(path)
+        if (p / "densefusion_ros" / "msg").is_dir():
+            generated_sites.append(str(p))
+
+    for site in reversed(list(dict.fromkeys(generated_sites))):
+        if site in sys.path:
+            sys.path.remove(site)
+        sys.path.insert(0, site)
+
+    loaded_pkg = sys.modules.get("densefusion_ros")
+    loaded_file = str(getattr(loaded_pkg, "__file__", ""))
+    if loaded_pkg is not None and "/site-packages/" not in loaded_file:
+        sys.modules.pop("densefusion_ros", None)
+        sys.modules.pop("densefusion_ros.msg", None)
+
+    from densefusion_ros.msg import PoseEstimationResult
+
+    PoseEstimationResult.__class__.__import_type_support__()
+    if PoseEstimationResult.__class__._TYPE_SUPPORT is None:
+        raise RuntimeError(
+            "PoseEstimationResult type support is unavailable. "
+            "Please rebuild and source this workspace."
+        )
+    return PoseEstimationResult
+
+
+PoseEstimationResult = _load_pose_result_msg_type()
 
 from .densefusion_core import CameraIntrinsics, OnnxDenseFusion, Yolo11SegOnnx, preprocess_rgbd, quaternion_matrix
 from .densefusion_core.preprocess import infer_pose_onnx
@@ -39,18 +86,25 @@ class DenseFusionRosNodeYcb(Node):
             "/home/data/qrb_ros_simulation_ws/DenseFusion-1/yolo11-seg-model/yolo26n-seg.onnx",
         )
         self.declare_parameter("target_label", "banana")
+        self.declare_parameter("target_conf", 0.25)
         self.declare_parameter("yolo_score_th", 0.25)
         self.declare_parameter("yolo_mask_th", 0.5)
-        self.declare_parameter("cam_fx", 1066.778)
-        self.declare_parameter("cam_fy", 1067.487)
-        self.declare_parameter("cam_cx", 312.9869)
-        self.declare_parameter("cam_cy", 241.3109)
+        # self.declare_parameter("cam_fx", 1066.778)
+        # self.declare_parameter("cam_fy", 1067.487)
+        # self.declare_parameter("cam_cx", 312.9869)
+        # self.declare_parameter("cam_cy", 241.3109)
+        self.declare_parameter("cam_fx", 461.07720947265625)
+        self.declare_parameter("cam_fy", 461.29638671875)
+        self.declare_parameter("cam_cx", 318.0372009277344)
+        self.declare_parameter("cam_cy", 236.3270721435547)
         self.declare_parameter("depth_scale", 1.0)
         self.declare_parameter("input_h", 80)
         self.declare_parameter("input_w", 80)
         self.declare_parameter("save_vis", True)
+        self.declare_parameter("save_video", False)
+        self.declare_parameter("video_fps", 15.0)
         self.declare_parameter("vis_output_dir", "benchmark-ouputs/ros-ycb-node")
-        self.declare_parameter("save_vis_every_n", 1)
+        self.declare_parameter("save_vis_every_n", 10)
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -62,13 +116,16 @@ class DenseFusionRosNodeYcb(Node):
         self.refine_onnx_path = str(self.get_parameter("refine_onnx_path").value)
         self.yolo_seg_onnx_path = str(self.get_parameter("yolo_seg_onnx_path").value)
         self.target_label = str(self.get_parameter("target_label").value).strip().lower()
+        self.target_conf = float(self.get_parameter("target_conf").value)
         self.yolo_score_th = float(self.get_parameter("yolo_score_th").value)
         self.yolo_mask_th = float(self.get_parameter("yolo_mask_th").value)
         self.depth_scale = float(self.get_parameter("depth_scale").value)
         self.input_h = int(self.get_parameter("input_h").value)
         self.input_w = int(self.get_parameter("input_w").value)
         self.save_vis = bool(self.get_parameter("save_vis").value)
-        self.vis_output_dir = str(self.get_parameter("vis_output_dir").value)
+        self.save_video = bool(self.get_parameter("save_video").value)
+        self.video_fps = float(self.get_parameter("video_fps").value)
+        self.vis_output_dir = str(self.get_parameter("vis_output_dir").value + f"/{self.target_label}")
         self.save_vis_every_n = int(self.get_parameter("save_vis_every_n").value)
 
         if self.obj_id not in YCB_OBJ_IDS:
@@ -92,20 +149,35 @@ class DenseFusionRosNodeYcb(Node):
             self.yolo_seg = Yolo11SegOnnx(self.yolo_seg_onnx_path, score_th=self.yolo_score_th, mask_th=self.yolo_mask_th)
 
         if self.save_vis:
-            os.makedirs(self.vis_output_dir, exist_ok=True)
+            if not os.path.exists(self.vis_output_dir):
+                os.makedirs(self.vis_output_dir, exist_ok=True)
+            # else:
+            #     import shutil
+            #     shutil.remove(self.vis_output_dir)
+    
         self.frame_counter = 0
+        self.video_writer = None
+        self.video_path = os.path.join(self.vis_output_dir, f"{self.target_label}_pose.mp4")
 
         self.pose_pub = self.create_publisher(PoseStamped, "/pose_stamp", 10)
         self.offset_pub = self.create_publisher(Vector3Stamped, "/pose_stamp_offset", 10)
         self.rot_mat_pub = self.create_publisher(Float64MultiArray, "/pose_stamp_rotation_matrix", 10)
+        self.pose_result_pub = self.create_publisher(PoseEstimationResult, "/pose_estimation_result", 10)
+        self.pose_result_frame_id = 0
 
-        self.rgb_sub = Subscriber(self, Image, self.rgb_topic)
-        self.depth_sub = Subscriber(self, Image, self.depth_topic)
+        # Keep only the newest sensor frame to avoid processing stale backlog.
+        sensor_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+        )
+        self.rgb_sub = Subscriber(self, Image, self.rgb_topic, qos_profile=sensor_qos)
+        self.depth_sub = Subscriber(self, Image, self.depth_topic, qos_profile=sensor_qos)
         subs = [self.rgb_sub, self.depth_sub]
         if self.mask_topic:
-            self.mask_sub = Subscriber(self, Image, self.mask_topic)
+            self.mask_sub = Subscriber(self, Image, self.mask_topic, qos_profile=sensor_qos)
             subs.append(self.mask_sub)
-        self.sync = ApproximateTimeSynchronizer(subs, queue_size=10, slop=0.1)
+        self.sync = ApproximateTimeSynchronizer(subs, queue_size=1, slop=0.03)
         self.sync.registerCallback(self._on_sync)
 
     def _image_to_numpy(self, msg: Image) -> np.ndarray:
@@ -165,20 +237,23 @@ class DenseFusionRosNodeYcb(Node):
             banana_inst = None
             for inst in instances:
                 if inst["label"] == self.target_label:
+                    if inst["score"] < self.target_conf:
+                        continue
                     if banana_inst is None or inst["score"] > banana_inst["score"]:
                         banana_inst = inst
                 else:
                     other_instances.append(inst)
-                    self.get_logger().warn(
-                        f"Non-target object detected: '{inst['label']}' "
-                        f"(class_id={inst['class_id']}, score={inst['score']:.2f}) — ignored for pose estimation."
-                    )
+                    # self.get_logger().warn(
+                    #     f"Non-target object detected: '{inst['label']}' "
+                    #     f"(class_id={inst['class_id']}, score={inst['score']:.2f}) — ignored for pose estimation."
+                    # )
 
             if banana_inst is None:
-                self.get_logger().warn(
-                    f"YOLO '{self.target_label}' mask unavailable; fallback to depth>0 mask."
-                )
-                mask = (depth > 0).astype(np.uint8) * 255
+                # self.get_logger().warn(
+                #     f"YOLO '{self.target_label}' mask unavailable with target_conf>={self.target_conf:.2f}; fallback to depth>0 mask."
+                # )
+                # mask = (depth > 0).astype(np.uint8) * 255
+                return
             else:
                 mask = banana_inst["mask"]
 
@@ -189,7 +264,21 @@ class DenseFusionRosNodeYcb(Node):
 
         quat, trans, conf = infer_pose_onnx(self.runner, data, self.iteration, self.num_points)
         rot = quaternion_matrix(quat)[:3, :3]
+        if trans[2] < 0:
+            self.get_logger().warn("Trans z is negative, frame skipped.")
+            return
+        if trans[2] > 0.6:
+            self.get_logger().warn("Trans z is greater than 1.0, frame skipped.")
+            return
         self._publish_pose(rgb_msg, quat, trans, rot)
+        roll, pitch, yaw = self._rot_to_euler_deg(rot)
+        rot_str = np.array2string(rot, precision=4, suppress_small=True, separator=", ").replace("\n", "")
+        self.get_logger().info(
+            f"Published pose | label={self.target_label} conf={conf:.4f} "
+            f"R={rot_str} "
+            f"euler_rpy_deg=(roll={roll:.2f}, pitch={pitch:.2f}, yaw={yaw:.2f}) "
+            f"T_xyz_m=({trans[0]:.4f}, {trans[1]:.4f}, {trans[2]:.4f})"
+        )
         self._save_visualization(rgb_msg, rgb, mask, rot, trans, conf, other_instances)
 
     def _project(self, pt3: np.ndarray):
@@ -284,7 +373,21 @@ class DenseFusionRosNodeYcb(Node):
             cv2.putText(vis, label_text, (bx, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         fname = f"{rgb_msg.header.stamp.sec}_{rgb_msg.header.stamp.nanosec}.png"
-        cv2.imwrite(os.path.join(self.vis_output_dir, fname), vis)
+        if self.save_video:
+            if self.video_writer is None:
+                h, w = vis.shape[:2]
+                fps = self.video_fps if self.video_fps > 0 else 15.0
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                self.video_writer = cv2.VideoWriter(self.video_path, fourcc, fps, (w, h))
+                if not self.video_writer.isOpened():
+                    self.get_logger().error(f"Failed to open video writer: {self.video_path}")
+                    self.video_writer = None
+                else:
+                    self.get_logger().info(f"Saving visualization video to: {self.video_path}")
+            if self.video_writer is not None:
+                self.video_writer.write(vis)
+        else:
+            cv2.imwrite(os.path.join(self.vis_output_dir, fname), vis)
 
     def _publish_pose(self, rgb_msg: Image, quat: np.ndarray, trans: np.ndarray, rot: np.ndarray):
         pose = PoseStamped()
@@ -306,6 +409,21 @@ class DenseFusionRosNodeYcb(Node):
         rot_msg = Float64MultiArray()
         rot_msg.data = rot.reshape(-1).astype(float).tolist()
         self.rot_mat_pub.publish(rot_msg)
+
+        pose_result = PoseEstimationResult()
+        pose_result.header = rgb_msg.header
+        pose_result.frame_id = int(self.pose_result_frame_id)
+        pose_result.rotation_matrix = rot.reshape(-1).astype(float).tolist()
+        pose_result.translation_vector = trans.reshape(-1).astype(float).tolist()
+        self.pose_result_pub.publish(pose_result)
+        self.pose_result_frame_id += 1
+
+    def destroy_node(self):
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.video_writer = None
+            self.get_logger().info(f"Video saved: {self.video_path}")
+        return super().destroy_node()
 
 
 def main():
