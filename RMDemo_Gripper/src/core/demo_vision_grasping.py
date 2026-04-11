@@ -72,9 +72,9 @@ class VisionGraspingSystem:
                                         [0.00932809, -0.03562485, 0.9993217]])
         # self.rotation_matrix = np.eye(3, dtype=float)
         # 相机坐标系到机械臂末端坐标系的平移向量，通过手眼标定得到（单位：m）
-        # self.translation_vector = np.array([-0.07039019, 0.03225555, -0.03256825])
-        self.translation_vector = np.array([-0.18809, 0.00411, 0.78435])
-        # self.translation_vector = np.array([-0.02, 0.001, -0.02])
+        # 原始数据:
+        self.translation_vector = np.array([-0.08039019, 0.03225555, -0.08256825])
+        # self.translation_vector = np.array([-0.18809, 0.00411, 0.78435])
 
         # PoseEstimationResult(x左,y上,z后) -> 末端执行器(x上,y右,z前) 轴映射
         self.pose_result_to_ee_axes = np.array([
@@ -180,7 +180,7 @@ class VisionGraspingSystem:
         """
         t_m = np.asarray(translation_vec, dtype=float)
         # 米制下，机械臂近场抓取通常不会超过数米；超范围给出提示，便于排查上游单位配置。
-        if np.max(np.abs(t_m)) > 5.0:
+        if np.max(np.abs(t_m)) > 1.0:
             print(
                 "[DenseFusion][单位提示] translation_vector 数值较大，当前代码按米(m)解析；"
                 "如上游输出为毫米(mm)，请在上游统一改为米。"
@@ -959,12 +959,12 @@ class VisionGraspingSystem:
                 if self.object_pose_in_base is not None:
                     pre_grasp_pose = self.object_pose_in_base.copy()
                     # pre_grasp_pose[0] += 0.05 # x轴向右移动5cm
-                    # pre_grasp_pose[2] += 0.10 # z轴加10cm
+                    pre_grasp_pose[2] += -0.10 # z轴加10cm
 
                     print(f"[运动] 移动到预抓取位姿")
                     print(f"  原始位姿: {self.object_pose_in_base[:3]}")
                     print(f"  预抓取位姿: {pre_grasp_pose[:3]}")
-                    if not self.movej_p(pre_grasp_pose, v=10):
+                    if not self.movel(pre_grasp_pose, v=10):
                         self._enter_failure(
                             "MOVE_TO_PRE_GRASP",
                             "机械臂未能到达预抓取位姿",
@@ -1247,9 +1247,9 @@ class VisionGraspingSystem:
                         return
                 time.sleep(0.5)  # 短暂延时
             
-            if cycle < cycles - 1:
-                print(f"\n完成第 {cycle+1} 个循环，准备开始下一个循环...")
-                time.sleep(2)
+            # if cycle < cycles - 1:
+            #     print(f"\n完成第 {cycle+1} 个循环，准备开始下一个循环...")
+            #     time.sleep(2)
         
         print("\n" + "="*60)
         print("所有抓取循环完成！")

@@ -104,7 +104,7 @@ class DenseFusionRosNodeYcb(Node):
         self.declare_parameter("save_video", False)
         self.declare_parameter("video_fps", 15.0)
         self.declare_parameter("vis_output_dir", "benchmark-ouputs/ros-ycb-node")
-        self.declare_parameter("save_vis_every_n", 10)
+        self.declare_parameter("save_vis_every_n", 1)
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -233,14 +233,20 @@ class DenseFusionRosNodeYcb(Node):
                 self.get_logger().warn("No mask source available; frame skipped.")
                 return
 
-            instances = self.yolo_seg.infer_instances(rgb)
-            banana_inst = None
-            for inst in instances:
+            all_instances = self.yolo_seg.infer_instances(rgb)
+            target_inst = None
+            for inst in all_instances:
                 if inst["label"] == self.target_label:
                     if inst["score"] < self.target_conf:
                         continue
-                    if banana_inst is None or inst["score"] > banana_inst["score"]:
-                        banana_inst = inst
+                    x, y, w, h = cv2.boundingRect(cv2.findNonZero(inst["mask"][:, :, 0] if inst["mask"].ndim == 3 else inst["mask"]))
+                    area = w * h
+                    image_area = rgb.shape[0] * rgb.shape[1]
+                    # if area / image_area < (1/12):
+                    #     self.get_logger().warn(f"Object area is less than 1/12 of image area; frame skipped.")
+                    #     continue
+                    if target_inst is None or inst["score"] > target_inst["score"]:
+                        target_inst = inst
                 else:
                     other_instances.append(inst)
                     # self.get_logger().warn(
@@ -248,14 +254,14 @@ class DenseFusionRosNodeYcb(Node):
                     #     f"(class_id={inst['class_id']}, score={inst['score']:.2f}) — ignored for pose estimation."
                     # )
 
-            if banana_inst is None:
+            if target_inst is None:
                 # self.get_logger().warn(
                 #     f"YOLO '{self.target_label}' mask unavailable with target_conf>={self.target_conf:.2f}; fallback to depth>0 mask."
                 # )
                 # mask = (depth > 0).astype(np.uint8) * 255
                 return
             else:
-                mask = banana_inst["mask"]
+                mask = target_inst["mask"]
 
         data = preprocess_rgbd(rgb, depth, mask, self.obj_index, self.num_points, self.intr, input_h=self.input_h, input_w=self.input_w)
         if data is None:
@@ -264,11 +270,7 @@ class DenseFusionRosNodeYcb(Node):
 
         quat, trans, conf = infer_pose_onnx(self.runner, data, self.iteration, self.num_points)
         rot = quaternion_matrix(quat)[:3, :3]
-        if trans[2] < 0:
-            self.get_logger().warn("Trans z is negative, frame skipped.")
-            return
-        if trans[2] > 0.6:
-            self.get_logger().warn("Trans z is greater than 1.0, frame skipped.")
+        if not self._check_pose(quat, trans, conf):
             return
         self._publish_pose(rgb_msg, quat, trans, rot)
         roll, pitch, yaw = self._rot_to_euler_deg(rot)
@@ -280,6 +282,21 @@ class DenseFusionRosNodeYcb(Node):
             f"T_xyz_m=({trans[0]:.4f}, {trans[1]:.4f}, {trans[2]:.4f})"
         )
         self._save_visualization(rgb_msg, rgb, mask, rot, trans, conf, other_instances)
+
+    def _check_pose(self, quat: np.ndarray, trans: np.ndarray, conf: float):
+        if not np.all(np.isfinite(quat)) or not np.all(np.isfinite(trans)):
+            self.get_logger().warn("Invalid pose; frame skipped.")
+            return False
+        if trans[2] < 0:
+            self.get_logger().warn("Trans z is negative; frame skipped.")
+            return False
+        if trans[2] > 0.6:
+            self.get_logger().warn("Trans z is greater than 0.6; frame skipped.")
+            return False
+        if conf < 0.2:
+            self.get_logger().warn("Confidence is less than 0.2; frame skipped.")
+            return False
+        return True
 
     def _project(self, pt3: np.ndarray):
         x, y, z = float(pt3[0]), float(pt3[1]), float(pt3[2])
