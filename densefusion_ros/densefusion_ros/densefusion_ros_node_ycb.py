@@ -104,7 +104,7 @@ class DenseFusionRosNodeYcb(Node):
         self.declare_parameter("save_video", False)
         self.declare_parameter("video_fps", 15.0)
         self.declare_parameter("vis_output_dir", "benchmark-ouputs/ros-ycb-node")
-        self.declare_parameter("save_vis_every_n", 1)
+        self.declare_parameter("save_vis_every_n", 10)
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -290,10 +290,10 @@ class DenseFusionRosNodeYcb(Node):
         if trans[2] < 0:
             self.get_logger().warn("Trans z is negative; frame skipped.")
             return False
-        if trans[2] > 0.6:
+        if trans[2] > 2:
             self.get_logger().warn("Trans z is greater than 0.6; frame skipped.")
             return False
-        if conf < 0.2:
+        if conf < 0.1:
             self.get_logger().warn("Confidence is less than 0.2; frame skipped.")
             return False
         return True
@@ -407,6 +407,8 @@ class DenseFusionRosNodeYcb(Node):
             cv2.imwrite(os.path.join(self.vis_output_dir, fname), vis)
 
     def _publish_pose(self, rgb_msg: Image, quat: np.ndarray, trans: np.ndarray, rot: np.ndarray):
+        # 和机械臂末端的X轴运动方向一致
+        trans[0] = trans[0] * -1.0
         pose = PoseStamped()
         pose.header = rgb_msg.header
         pose.pose.position.x = float(trans[0])

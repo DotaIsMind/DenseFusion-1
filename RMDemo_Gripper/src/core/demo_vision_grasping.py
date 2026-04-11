@@ -73,8 +73,10 @@ class VisionGraspingSystem:
         # self.rotation_matrix = np.eye(3, dtype=float)
         # 相机坐标系到机械臂末端坐标系的平移向量，通过手眼标定得到（单位：m）
         # 原始数据:
-        self.translation_vector = np.array([-0.08039019, 0.03225555, -0.08256825])
-        # self.translation_vector = np.array([-0.18809, 0.00411, 0.78435])
+        # self.translation_vector = np.array([-0.08039019, 0.03225555, -0.08256825])
+        # self.translation_vector = np.array([-0.0, 0.0, -0.0])
+        # 待标定数据
+        self.translation_vector = np.array([-0.14039019, -0.05225555, -0.12256825])
 
         # PoseEstimationResult(x左,y上,z后) -> 末端执行器(x上,y右,z前) 轴映射
         self.pose_result_to_ee_axes = np.array([
@@ -130,7 +132,7 @@ class VisionGraspingSystem:
         
         # ── 初始位姿和检测位姿 ────────────────────────────────────────────────
         self.home_joint_angles = [0.298, 26.316, -134.891, 2.141, -2.522, 3.098]  # home mode
-        self.detection_joint_angles = [0.685, 30.513, -141.615, 2.152, 4.788, 3.063]  # detect mode
+        self.detection_joint_angles = [-0.144, 8.962, -145.927, -2.342, 44.379, 2.226]  # detect mode
         self.ready_joint_angle = [0.298, 26.316, -134.891, 2.141, -2.522, 3.098]  # ready mode 
         # self.pre_grab_joint_angle = [0.307, -1.470, -150.770, 2.131, 62.021, 3.337]  # pre grab mode
         
@@ -239,6 +241,8 @@ class VisionGraspingSystem:
                 # 物体在相机坐标系下的旋转矩阵和平移向量
                 r_pose = np.array(latest_valid_msg.rotation_matrix, dtype=float).reshape(3, 3)
                 t_pose_m = self._normalize_pose_translation_m(latest_valid_msg.translation_vector)
+                # 末端运动方向 x_ee = -x_cam
+                # t_pose_m[0] = -t_pose_m[0]
 
                 # r_pose = self._convert_pose_result_rotation_to_ee(r_pose)
                 # t_pose = self._convert_pose_result_vector_to_ee(t_pose)
@@ -372,7 +376,7 @@ class VisionGraspingSystem:
 
         return True, "自碰撞检查通过"
     
-    def movej(self, joint_angles, v=20, r=0, connect=0, block=1):
+    def movej(self, joint_angles, v=30, r=0, connect=0, block=1):
         """
         关节空间运动
         
@@ -395,7 +399,7 @@ class VisionGraspingSystem:
         time.sleep(2)
         return ok
     
-    def movej_p(self, pose, v=10, r=0, connect=0, block=1):
+    def movej_p(self, pose, v=30, r=0, connect=0, block=1):
         """
         笛卡尔空间关节运动
         
@@ -424,7 +428,7 @@ class VisionGraspingSystem:
         time.sleep(2)
         return ok
     
-    def movel(self, pose, v=20, r=0, connect=0, block=1):
+    def movel(self, pose, v=30, r=0, connect=0, block=1):
         """
         笛卡尔空间直线运动
         
@@ -518,12 +522,14 @@ class VisionGraspingSystem:
         我们需要将旋转向量和平移向量转换为齐次变换矩阵，然后使用深度相机识别到的物体坐标（x, y, z）和
         机械臂末端的位姿（x1,y1,z1,rx,ry,rz）来计算物体相对于机械臂基座的位姿（x, y, z, rx, ry, rz）
         """
-        # 相机坐标系到机械臂末端坐标系的旋转矩阵和平移向量
-        rotation_matrix = np.array([[ 0.01206237 , 0.99929647  ,0.03551135],
-                                    [-0.99988374 , 0.01172294 , 0.00975125],
-                                    [ 0.00932809 ,-0.03562485 , 0.9993217 ]])
-        # rotation_matrix = np.eye(3, dtype=float)
-        translation_vector = np.array([-0.06039019, 0.03225555, -0.06256825])
+        # # 相机坐标系到机械臂末端坐标系的旋转矩阵和平移向量
+        # rotation_matrix = np.array([[ 0.01206237 , 0.99929647  ,0.03551135],
+        #                             [-0.99988374 , 0.01172294 , 0.00975125],
+        #                             [ 0.00932809 ,-0.03562485 , 0.9993217 ]])
+        # # rotation_matrix = np.eye(3, dtype=float)
+        # translation_vector = np.array([-0.06039019, 0.03225555, -0.06256825])
+        rotation_matrix = self.rotation_matrix
+        translation_vector = self.translation_vector
         # 深度相机识别物体返回的坐标
         obj_camera_coordinates = np.array([x, y, z])
 
@@ -898,7 +904,7 @@ class VisionGraspingSystem:
                 print("状态: MOVE_TO_HOME - 移动到初始位姿")
                 print("="*60)
                 print("[运动] 移动到初始位姿")
-                if not self.movej(self.home_joint_angles, v=10):
+                if not self.movej(self.home_joint_angles, v=30):
                     self._enter_failure("MOVE_TO_HOME", "机械臂未能到达初始位姿", recover_state="MOVE_TO_HOME")
                     return
                 self._mark_state_success("MOVE_TO_HOME")
@@ -917,7 +923,7 @@ class VisionGraspingSystem:
                 print("状态: MOVE_TO_DETECTION_POSE - 移动到检测物品位姿")
                 print("="*60)
                 print("[运动] 移动到检测物品位姿")
-                if not self.movej(self.detection_joint_angles, v=10):
+                if not self.movej(self.detection_joint_angles, v=30):
                     self._enter_failure(
                         "MOVE_TO_DETECTION_POSE",
                         "机械臂未能到达检测位姿",
@@ -958,13 +964,13 @@ class VisionGraspingSystem:
                 print("="*60)
                 if self.object_pose_in_base is not None:
                     pre_grasp_pose = self.object_pose_in_base.copy()
-                    # pre_grasp_pose[0] += 0.05 # x轴向右移动5cm
-                    pre_grasp_pose[2] += -0.10 # z轴加10cm
-
+                    # 预抓取位姿为base坐标系, 所以是x轴加10cm
+                    pre_grasp_pose[0] += 0.10 # x轴加10cm
+                    
                     print(f"[运动] 移动到预抓取位姿")
                     print(f"  原始位姿: {self.object_pose_in_base[:3]}")
                     print(f"  预抓取位姿: {pre_grasp_pose[:3]}")
-                    if not self.movel(pre_grasp_pose, v=10):
+                    if not self.movel(pre_grasp_pose, v=20):
                         self._enter_failure(
                             "MOVE_TO_PRE_GRASP",
                             "机械臂未能到达预抓取位姿",
@@ -993,7 +999,7 @@ class VisionGraspingSystem:
                 print("="*60)
                 if self.object_pose_in_base is not None:
                     print(f"[运动] 移动到抓取位姿: {self.object_pose_in_base[:3]}")
-                    if not self.movej_p(self.object_pose_in_base, v=10):
+                    if not self.movej_p(self.object_pose_in_base, v=30):
                         self._enter_failure("MOVE_TO_GRASP", "机械臂未能到达抓取位姿", recover_state="MOVE_TO_PRE_GRASP")
                         return
                     self._mark_state_success("MOVE_TO_GRASP")
@@ -1018,7 +1024,7 @@ class VisionGraspingSystem:
                 print("状态: CHECK_GRASP_SUCCESS - 检查抓取是否成功")
                 print("="*60)
                 print("[运动] 返回到检测位姿")
-                if not self.movej(self.detection_joint_angles, v=10):
+                if not self.movej(self.detection_joint_angles, v=30):
                     self._enter_failure(
                         "CHECK_GRASP_SUCCESS",
                         "返回检测位姿失败，无法判定抓取结果",
@@ -1057,8 +1063,8 @@ class VisionGraspingSystem:
                     self.retry_count = 0
                     self.current_state = "CHECK_OBJECT"
                 else:
-                    print(f"[重试机制] 进行第 {self.retry_count} 次重试")
-                    self.current_state = "MOVE_TO_PRE_GRASP"
+                    print(f"[重试机制] 进行第 {self.retry_count} 次重试：返回检测位姿并重新识别后再抓取")
+                    self.current_state = "CHECK_OBJECT"
 
             elif self.current_state == "PLACE_OBJECT":
                 print("\n" + "="*60)
@@ -1070,7 +1076,7 @@ class VisionGraspingSystem:
                     place_pose = current_pose.copy()
                     place_pose[1] += 0.2 # y轴向右移动20cm
                     place_pose[2] += 0.2 # x轴向上移动20cm
-                    if not self.movej_p(place_pose, v=10):
+                    if not self.movej_p(place_pose, v=30):
                         self._enter_failure("PLACE_OBJECT", "移动到放置位姿失败", recover_state="MOVE_TO_DETECTION_POSE")
                         return
                     time.sleep(2)
@@ -1094,7 +1100,7 @@ class VisionGraspingSystem:
                 print("状态: RETURN_TO_DETECTION_POSE - 返回检测位姿")
                 print("="*60)
                 print("[运动] 返回检测位姿")
-                if not self.movej(self.detection_joint_angles, v=10):
+                if not self.movej(self.detection_joint_angles, v=30):
                     self._enter_failure(
                         "RETURN_TO_DETECTION_POSE",
                         "抓取后返回检测位姿失败",
@@ -1113,7 +1119,7 @@ class VisionGraspingSystem:
                 print("状态: RETURN_TO_HOME - 返回初始位姿")
                 print("="*60)
                 print("[运动] 返回初始位姿")
-                if not self.movej(self.home_joint_angles, v=10):
+                if not self.movej(self.home_joint_angles, v=30):
                     self._enter_failure("RETURN_TO_HOME", "返回初始位姿失败", recover_state="RETURN_TO_HOME")
                     return
                 time.sleep(2)
@@ -1129,7 +1135,7 @@ class VisionGraspingSystem:
                 print("="*60)
                 print(f"[恢复] 最近错误: {self.last_error}")
                 print("[恢复] 尝试先回到检测位姿")
-                if self.movej(self.detection_joint_angles, v=20):
+                if self.movej(self.detection_joint_angles, v=30):
                     print(f"[恢复] 恢复成功，返回状态: {self.recovery_target_state}")
                     self.current_state = self.recovery_target_state
                 else:

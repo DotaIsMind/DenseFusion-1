@@ -1,3 +1,4 @@
+#!/bin/bash
 source /home/ubuntu/miniconda3/bin/activate onepose
 source /opt/ros/jazzy/setup.bash
 source /home/ubuntu/tengf/vision-grab/DenseFusion-1/densefusion_ros/install/setup.bash
