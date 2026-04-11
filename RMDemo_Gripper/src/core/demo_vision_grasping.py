@@ -531,6 +531,9 @@ class VisionGraspingSystem:
         rotation_matrix = self.rotation_matrix
         translation_vector = self.translation_vector
         # 深度相机识别物体返回的坐标
+        # 和机械臂末端的X轴,y轴反向
+        x = x * -1.0
+        # y = y + 0.16
         obj_camera_coordinates = np.array([x, y, z])
 
         # 机械臂末端的位姿，单位为弧度
@@ -965,8 +968,8 @@ class VisionGraspingSystem:
                 if self.object_pose_in_base is not None:
                     pre_grasp_pose = self.object_pose_in_base.copy()
                     # 预抓取位姿为base坐标系, 所以是x轴加10cm
-                    pre_grasp_pose[0] += 0.10 # x轴加10cm
-                    
+                    pre_grasp_pose[0] += 0.15 # x轴加10cm
+
                     print(f"[运动] 移动到预抓取位姿")
                     print(f"  原始位姿: {self.object_pose_in_base[:3]}")
                     print(f"  预抓取位姿: {pre_grasp_pose[:3]}")

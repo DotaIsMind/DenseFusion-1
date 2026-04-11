@@ -407,8 +407,6 @@ class DenseFusionRosNodeYcb(Node):
             cv2.imwrite(os.path.join(self.vis_output_dir, fname), vis)
 
     def _publish_pose(self, rgb_msg: Image, quat: np.ndarray, trans: np.ndarray, rot: np.ndarray):
-        # 和机械臂末端的X轴运动方向一致
-        trans[0] = trans[0] * -1.0
         pose = PoseStamped()
         pose.header = rgb_msg.header
         pose.pose.position.x = float(trans[0])
