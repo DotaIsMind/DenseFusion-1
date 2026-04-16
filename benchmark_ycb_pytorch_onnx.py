@@ -551,4 +551,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    """
+    /home/data/miniconda3/envs/onepose/bin/python /home/data/qrb_ros_simulation_ws/DenseFusion-1/benchmark_ycb_pytorch_onnx.py \
+    --bop_scene_dir /home/data/qrb_ros_simulation_ws/DenseFusion-1/datasets/ycb-test-data/test~left_pbr/000048 \
+    --torch_model /home/data/qrb_ros_simulation_ws/DenseFusion-1/trained_checkpoints/linemod/trained_checkpoints/ycb/pose_model_26_0.012863246640872631.pth \
+    --torch_refine_model /home/data/qrb_ros_simulation_ws/DenseFusion-1/trained_checkpoints/linemod/trained_checkpoints/ycb/pose_refine_model_69_0.009449292959118935.pth \
+    --onnx_pose_model /home/data/qrb_ros_simulation_ws/DenseFusion-1/ycb-data-onnx-model/densefusion_ycb_posenet.onnx \
+    --onnx_refine_model /home/data/qrb_ros_simulation_ws/DenseFusion-1/ycb-data-onnx-model/densefusion_ycb_refiner.onnx \
+    --num_points 1000 \
+    --num_samples 100 \
+    --warmup 5 \
+    --output_json /home/data/qrb_ros_simulation_ws/DenseFusion-1/ycb_benchmark_result.json
+    """
     main()

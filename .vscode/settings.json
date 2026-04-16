@@ -3,5 +3,7 @@
     "ROS2.rosSetupScript": "/home/data/qrb_ros_simulation_ws/DenseFusion-1/densefusion_ros/install/setup.bash",
     "python.autoComplete.extraPaths": [
         "/opt/ros/jazzy/lib/python3.12/site-packages"
-    ]
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }

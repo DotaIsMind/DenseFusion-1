@@ -15,5 +15,6 @@ log/
 benchmark-ouputs/
 densefusion_ros/densefusion_vis/
 datasets/ycb-test-data/
+robot_arm_grasping_with_pose_estimation/
 
 .vscode/
